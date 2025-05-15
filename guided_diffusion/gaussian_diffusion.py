@@ -74,7 +74,7 @@ class GaussianDiffusion:
                  ):
 
         # use float64 for accuracy.
-        self.sigma = 0.05
+        self.sigma = 0.4472
         self.c_rate = c_rate
         self.M = particle_size    # Subsampling size
         

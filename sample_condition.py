@@ -9,8 +9,13 @@ import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import numpy as np
 
-from piq import psnr, ssim
-from piq.perceptual import LPIPS
+from tqdm import tqdm
+
+# from piq import psnr, ssim # Original psnr, ssim from piq
+# from piq.perceptual import LPIPS # Original LPIPS from piq
+from skimage.metrics import peak_signal_noise_ratio # For PSNR as in compute_metric.py
+import lpips # For LPIPS as in compute_metric.py
+import csv # For logging metrics
 
 from guided_diffusion.condition_methods import get_conditioning_method
 from guided_diffusion.measurements import get_noise, get_operator
@@ -18,7 +23,7 @@ from guided_diffusion.unet import create_model
 from guided_diffusion.gaussian_diffusion import create_sampler
 from guided_diffusion.svd_replacement import Deblurring, Deblurring2D
 from data.dataloader import get_dataset, get_dataloader
-from util.img_utils import clear_color, mask_generator, _transform, Blurkernel
+from util.img_utils import clear_color, mask_generator, Blurkernel #, _transform
 from util.logger import get_logger
 
 
@@ -46,6 +51,9 @@ def main():
     logger.info(f"Device set to {device_str}.")
     device = torch.device(device_str)  
     
+    # Initialize LPIPS model
+    loss_fn_lpips = lpips.LPIPS(net='vgg').to(device)
+
     # Load configurations
     model_config = load_yaml(args.model_config)
     diffusion_config = load_yaml(args.diffusion_config)
@@ -81,6 +89,20 @@ def main():
     for img_dir in ['input', 'recon', 'progress', 'label']:
         os.makedirs(os.path.join(out_path, img_dir), exist_ok=True)
 
+    # Setup metrics logging
+    metrics_log_dir = os.path.join(out_path, 'live_metrics_log')
+    os.makedirs(metrics_log_dir, exist_ok=True)
+    metrics_log_path = os.path.join(metrics_log_dir, 'live_metrics.csv')
+    
+    # Write header to CSV if file is new
+    if not os.path.exists(metrics_log_path) or os.path.getsize(metrics_log_path) == 0:
+        with open(metrics_log_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['image_index', 'psnr', 'lpips'])
+            
+    psnr_all = []
+    lpips_all = []
+
     # Prepare dataloader
     data_config = task_config['data']
     batch_size = 1  # Do not change this value. Larger batch size is not available for particle size > 1.
@@ -99,9 +121,10 @@ def main():
         
     # Do inference
     
-    for i, ref_img in enumerate(loader):
+    pbar = tqdm(enumerate(loader), total=len(loader), desc="Processing images")
+    for i, ref_img in pbar:
 
-        logger.info(f"Inference for image {i}")
+        # logger.info(f"Inference for image {i}")
         fnames = [str(j).zfill(5) + '.png' for j in range(i * batch_size, (i+1) * batch_size)]
         ref_img = ref_img.to(device)
 
@@ -156,10 +179,72 @@ def main():
         x_start = torch.randn(ref_img.shape, device=device).requires_grad_()
         sample = sample_fn(x_start=x_start, measurement=y_n, record=False, save_root=out_path).requires_grad_()
         
-        for _ in range(batch_size):
-            plt.imsave(os.path.join(out_path, 'input', fnames[_]), clear_color(y_n[_,:,:,:].unsqueeze(dim=0)))
-            plt.imsave(os.path.join(out_path, 'label', fnames[_]), clear_color(ref_img[_,:,:,:].unsqueeze(dim=0)))
-            plt.imsave(os.path.join(out_path, 'recon', fnames[_]), clear_color(sample[_,:,:,:].unsqueeze(dim=0)))
+        # Compute metrics
+        # Ensure tensors are detached and correctly formatted for metric functions
+        ref_img_detached = ref_img.detach()
+        sample_detached = sample.detach()
+
+        # PSNR calculation (expects numpy arrays, range [0, 1])
+        ref_img_np = clear_color(ref_img_detached.clone()) # Use clone if clear_color modifies input
+        sample_np = clear_color(sample_detached.clone())
+        current_psnr = peak_signal_noise_ratio(ref_img_np, sample_np, data_range=1.0)
+        
+        # LPIPS calculation (expects PyTorch tensors, range [-1, 1], BCHW)
+        # ref_img and sample are already in [-1, 1] and BCHW
+        current_lpips = loss_fn_lpips(sample_detached, ref_img_detached).item()
+        
+        psnr_all.append(current_psnr)
+        lpips_all.append(current_lpips)
+        
+        # Log metrics to CSV
+        with open(metrics_log_path, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([i, current_psnr, current_lpips])
+            
+        # Calculate running statistics
+        avg_psnr = np.mean(psnr_all)
+        avg_lpips = np.mean(lpips_all)
+        
+        n_samples = len(psnr_all)
+        if n_samples > 1:
+            std_psnr = np.std(psnr_all, ddof=0) # population std for consistency if not specified
+            std_lpips = np.std(lpips_all, ddof=0)
+            ci_psnr = 1.96 * (std_psnr / np.sqrt(n_samples))
+            ci_lpips = 1.96 * (std_lpips / np.sqrt(n_samples))
+        else:
+            std_psnr = 0
+            std_lpips = 0
+            ci_psnr = 0
+            ci_lpips = 0
+            
+        # Update tqdm description
+        pbar.set_description(
+            f"Img: {i} | Avg PSNR: {avg_psnr:.2f} ± {ci_psnr:.2f} | Avg LPIPS: {avg_lpips:.4f} ± {ci_lpips:.4f}"
+        )
+        pbar.set_postfix_str(f"Current PSNR: {current_psnr:.2f}, Current LPIPS: {current_lpips:.4f}")
+
+        # for _ in range(batch_size):
+        #     plt.imsave(os.path.join(out_path, 'input', fnames[_]), clear_color(y_n[_,:,:,:].unsqueeze(dim=0)))
+        #     plt.imsave(os.path.join(out_path, 'label', fnames[_]), clear_color(ref_img[_,:,:,:].unsqueeze(dim=0)))
+        #     plt.imsave(os.path.join(out_path, 'recon', fnames[_]), clear_color(sample[_,:,:,:].unsqueeze(dim=0)))
+
+    # Log final summary
+    if psnr_all and lpips_all: # Ensure lists are not empty
+        final_avg_psnr = np.mean(psnr_all)
+        final_avg_lpips = np.mean(lpips_all)
+        n_total = len(psnr_all)
+        if n_total > 1:
+            final_std_psnr = np.std(psnr_all, ddof=0)
+            final_std_lpips = np.std(lpips_all, ddof=0)
+            final_ci_psnr = 1.96 * (final_std_psnr / np.sqrt(n_total))
+            final_ci_lpips = 1.96 * (final_std_lpips / np.sqrt(n_total))
+        else:
+            final_ci_psnr = 0
+            final_ci_lpips = 0
+        logger.info(f"Finished processing {n_total} images.")
+        logger.info(f"Final Average PSNR: {final_avg_psnr:.2f} ± {final_ci_psnr:.2f}")
+        logger.info(f"Final Average LPIPS: {final_avg_lpips:.4f} ± {final_ci_lpips:.4f}")
+        logger.info(f"Metrics saved to {metrics_log_path}")
 
 if __name__ == '__main__':
     main()

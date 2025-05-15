@@ -155,17 +155,14 @@ class Folder:
 
 
 def random_sq_bbox(img, mask_shape, image_size=256, margin=(16, 16)):
-    """Generate a random sqaure mask for inpainting
+    """Generate a centered square mask for inpainting
     """
     B, C, H, W = img.shape
     h, w = mask_shape
-    margin_height, margin_width = margin
-    maxt = image_size - margin_height - h
-    maxl = image_size - margin_width - w
 
-    # bb
-    t = np.random.randint(margin_height, maxt)
-    l = np.random.randint(margin_width, maxl)
+    # Calculate center position
+    t = (H - h) // 2
+    l = (W - w) // 2
 
     # make mask
     mask = torch.ones([B, C, H, W], device=img.device)

@@ -13,4 +13,4 @@ python3 sample_condition.py \
     --gpu=$2 \
     --save_dir=$3 \
     --c_rate=$4 \
-    --particle_size = $5;
+    --particle_size=$5;

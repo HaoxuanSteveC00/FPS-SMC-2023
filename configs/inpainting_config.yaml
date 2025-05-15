@@ -12,11 +12,11 @@ measurement:
     name: inpainting
   mask_opt:
     mask_type: box
-    mask_len_range: !!python/tuple [128, 129]  # for box
+    mask_len_range: !!python/tuple [64, 65]  # for box
     # mask_prob_range: !!python/tuple [0.90, 0.92]  # for random
     image_size: 256
 
 
   noise:
     name: gaussian
-    sigma: 0.05
+    sigma: 0.4472
