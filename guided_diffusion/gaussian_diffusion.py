@@ -74,7 +74,7 @@ class GaussianDiffusion:
                  ):
 
         # use float64 for accuracy.
-        self.sigma = 0.05
+        self.sigma = 0.4472 #0.05
         self.c_rate = c_rate
         self.M = particle_size    # Subsampling size
         
@@ -328,7 +328,7 @@ class GaussianDiffusion:
     
     def _scale_timesteps(self, t):
         if self.rescale_timesteps:
-            return t.float() * (1000.0 / self.num_timesteps)
+            return t.float() * (2000.0 / self.num_timesteps)
         return t
 
 def space_timesteps(num_timesteps, section_counts):
@@ -450,7 +450,7 @@ class _WrappedModel:
         map_tensor = torch.tensor(self.timestep_map, device=ts.device, dtype=ts.dtype)
         new_ts = map_tensor[ts]
         if self.rescale_timesteps:
-            new_ts = new_ts.float() * (1000.0 / self.original_num_steps)
+            new_ts = new_ts.float() * (2000.0 / self.original_num_steps)
         return self.model(x, new_ts, **kwargs)
 
 
@@ -543,7 +543,7 @@ def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
     if schedule_name == "linear":
         # Linear schedule from Ho et al, extended to work for any number of
         # diffusion steps.
-        scale = 1000 / num_diffusion_timesteps
+        scale = 2000 / num_diffusion_timesteps
         beta_start = scale * 0.0001
         beta_end = scale * 0.02
         return np.linspace(
